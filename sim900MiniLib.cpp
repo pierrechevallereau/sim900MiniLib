@@ -53,7 +53,7 @@ boolean sim900MiniLib::_execCmd(String cmd, String resultMustBe, String prefix) 
         dataS.concat(data);
       }
     }
-    if (dataS) {
+    if (dataS != "") {
       break;
     }
     else {
@@ -170,7 +170,7 @@ boolean sim900MiniLib::checkRegistration() {
         dataS.concat(data);
       }
     }
-    if (dataS) {
+    if (dataS != "") {
       break;
     }
     else {
@@ -310,7 +310,7 @@ void sim900MiniLib::time(String timeInfos[7]) {
         dataNum.concat(data);
       }
     }
-    if (dataS) {
+    if (dataS != "") {
       break;
     }
     else {
