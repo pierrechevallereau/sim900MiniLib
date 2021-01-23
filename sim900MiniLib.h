@@ -14,8 +14,8 @@ class sim900MiniLib {
     boolean _receiveSMSmode = false;
 
     void _updateSerial();
-    void _printDebug(String message);
-    boolean _checkReturnOfTheCMD(String mustBe = "OK", String prefix = "");
+    void _printDebug(String message, boolean newLine = true);
+    boolean _execCmd(String cmd, String resultMustBe, String prefix = "");
 
   public:
     sim900MiniLib(SoftwareSerial * SIM900Serial, HardwareSerial * hwSerial, boolean debug);
@@ -48,7 +48,7 @@ class sim900MiniLib {
     void sendSMS(String phoneNumber, String textSMS);
 
     // Call someone
-    void callSomeone(String phoneNumber);
+    void callSomeone(String phoneNumber, boolean hangUp = false);
 
     // Get time
     void time(String timeInfos[2]);
