@@ -15,7 +15,7 @@ class sim900MiniLib {
 
     void _updateSerial();
     void _printDebug(String message, boolean newLine = true);
-    boolean _execCmd(String cmd, String resultMustBe, String prefix = "");
+    boolean _execCmd(String cmd, boolean (*function)(int), boolean returnResult, String dataToReturn[1], String resultMustBe, String prefix);
 
   public:
     sim900MiniLib(SoftwareSerial * SIM900Serial, HardwareSerial * hwSerial, boolean debug);
