@@ -64,16 +64,22 @@ boolean sim900MiniLib::_execCmd(String cmd, boolean (*function)(int), boolean re
     }
   }
   
+  // if returnResult is true and resultMustBe is "" then assign dataToReturn + return true
+  // if returnResult is true and resultMustBe is not "" then assing dataToReturn + continue the function
   if (returnResult) {
     dataToReturn[0] = dataS;
-    return true;
+    if (resultMustBe == ""){
+      return true;
+    }
   }
 
-  if (resultMustBe == ""){
+  // resultMustBe is mandatory if returnResult is false
+  if (!returnResult && resultMustBe == ""){
     this->_printDebug("please provide resultMustBe");
     return false;
   }
 
+  // check the result
   if (dataS.endsWith(resultMustBe)) {
     this->_printDebug(" is ok");
     return true;
@@ -244,7 +250,7 @@ void sim900MiniLib::readSMS(String smsData[4]) {
 }
 
 // Send SMS
-void sim900MiniLib::sendSMS(String phoneNumber, String textSMS) {
+boolean sim900MiniLib::sendSMS(String phoneNumber, String textSMS) {
   // send sms
   this->_printDebug("[Sim900] sending sms :");
   _serial->println("AT + CMGS = \"" + phoneNumber + "\"");
@@ -266,63 +272,55 @@ void sim900MiniLib::sendSMS(String phoneNumber, String textSMS) {
 
     if (dataS.endsWith("CMGSOK")) {
       this->_printDebug("is ok");
-      break;
+      return true;
     }
     else {
       this->_printDebug("waiting");
     }
     delay(250);
   }
+  this->_printDebug("is NOTOK");
+  return false;
 }
 
 // Call someone
-void sim900MiniLib::callSomeone(String phoneNumber, boolean hangUp) {
+void sim900MiniLib::callSomeone(String phoneNumber, long int delayBeforeHangUp) {
   String trash[1];
   // call
   this->_execCmd("ATD+ " + phoneNumber + ";", isAlphaNumeric, false, trash, "OK", "[Sim900] calling :");
 
   // wait for hang up
-  if (hangUp) {
-    delay(30000);
-  }
-  else {
-    delay(10000); // to increase
-  }
+  delay(delayBeforeHangUp); // to increase
   this->_execCmd("ATH", isAlphaNumeric, false, trash, "ATH", "[Sim900] hang up call :");
 }
 
 // Get time
-void sim900MiniLib::time(String timeInfos[7]) {
+boolean sim900MiniLib::time(String timeInfos[7]) {
   String dataS[1];
 
-  this->_execCmd("AT+CCLK?", isAlphaNumeric, true, dataS, "", "[Sim900] get time : ");
+  if(!this->_execCmd("AT+CCLK?", isAlphaNumeric, true, dataS, "OK", "[Sim900] get time :")) {
+    this->_printDebug(dataS[0]);
+    this->_printDebug("is notok");
+    return false;
+  }
 
-  char charArr[30];
-  dataS[0].toCharArray(charArr, 30);
-  String alpha, digit;
+  char charArr[27];
+  dataS[0].toCharArray(charArr, 27);
+  String digit;
   for (int i=0; i <= sizeof(charArr) / sizeof(charArr[0]); i++) {
-    if (isAlpha(charArr[i])) {
-      alpha.concat(charArr[i]);
-    }
-    else if (isDigit(charArr[i])) {
+    if (isDigit(charArr[i])) {
       digit.concat(charArr[i]);
     }
   }
 
-  if (alpha.endsWith("CCLKOK")) {
-    this->_printDebug("is ok");
-
-    char digitArr[digit.length()];
-    digit.toCharArray(digitArr, digit.length());
-    timeInfos[0].concat(digitArr[0]); timeInfos[0].concat(digitArr[1]); // Year
-    timeInfos[1].concat(digitArr[2]); timeInfos[1].concat(digitArr[3]); // Month
-    timeInfos[2].concat(digitArr[4]); timeInfos[2].concat(digitArr[5]); // Day
-    timeInfos[3].concat(digitArr[6]); timeInfos[3].concat(digitArr[7]); // Hour
-    timeInfos[4].concat(digitArr[8]); timeInfos[4].concat(digitArr[9]); // Minute
-    timeInfos[5].concat(digitArr[10]); timeInfos[5].concat(digitArr[11]); // Second
-    timeInfos[6].concat(digitArr[12]); timeInfos[6].concat(digitArr[13]); // Timezone
-  }
-  else {
-    this->_printDebug("is notok");
-  }
+  char digitArr[14];
+  digit.toCharArray(digitArr, 14);
+  timeInfos[0].concat(digitArr[0]); timeInfos[0].concat(digitArr[1]); // Year
+  timeInfos[1].concat(digitArr[2]); timeInfos[1].concat(digitArr[3]); // Month
+  timeInfos[2].concat(digitArr[4]); timeInfos[2].concat(digitArr[5]); // Day
+  timeInfos[3].concat(digitArr[6]); timeInfos[3].concat(digitArr[7]); // Hour
+  timeInfos[4].concat(digitArr[8]); timeInfos[4].concat(digitArr[9]); // Minute
+  timeInfos[5].concat(digitArr[10]); timeInfos[5].concat(digitArr[11]); // Second
+  timeInfos[6].concat(digitArr[12]); timeInfos[6].concat(digitArr[13]); // Timezone
+  return true;
 }
