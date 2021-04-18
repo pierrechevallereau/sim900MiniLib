@@ -68,7 +68,7 @@ boolean sim900MiniLib::_execCmd(String cmd, boolean (*function)(int), boolean re
   // if returnResult is true and resultMustBe is not "" then assing dataToReturn + continue the function
   if (returnResult) {
     dataToReturn[0] = dataS;
-    if (resultMustBe == ""){
+    if (resultMustBe == "") {
       return true;
     }
   }
@@ -197,7 +197,7 @@ boolean sim900MiniLib::checkRegistration() {
 }
 
 // Extract phone number, index, date and message from the SMS
-void sim900MiniLib::readSMS(String smsData[4]) {
+boolean sim900MiniLib::readSMS(String smsData[4]) {
   int ligneDelim = 0; // delimiter = '\n'
   int SMSInfoDelim = 0; //delimiter = '"'
   int rcvdCheck = 0;
@@ -245,8 +245,10 @@ void sim900MiniLib::readSMS(String smsData[4]) {
       smsData[3] = SMSMessage;
 
       this->_printDebug("received");
+      return true;
     }
   }
+  return false;
 }
 
 // Send SMS
@@ -283,17 +285,6 @@ boolean sim900MiniLib::sendSMS(String phoneNumber, String textSMS) {
   return false;
 }
 
-// Call someone
-void sim900MiniLib::callSomeone(String phoneNumber, long int delayBeforeHangUp) {
-  String trash[1];
-  // call
-  this->_execCmd("ATD+ " + phoneNumber + ";", isAlphaNumeric, false, trash, "OK", "[Sim900] calling :");
-
-  // wait for hang up
-  delay(delayBeforeHangUp); // to increase
-  this->_execCmd("ATH", isAlphaNumeric, false, trash, "ATH", "[Sim900] hang up call :");
-}
-
 // Get time
 boolean sim900MiniLib::time(String timeInfos[7]) {
   String dataS[1];
@@ -323,4 +314,40 @@ boolean sim900MiniLib::time(String timeInfos[7]) {
   timeInfos[5].concat(digitArr[10]); timeInfos[5].concat(digitArr[11]); // Second
   timeInfos[6].concat(digitArr[12]); timeInfos[6].concat(digitArr[13]); // Timezone
   return true;
+}
+
+// Call someone
+void sim900MiniLib::callSomeone(String phoneNumber, long int delayBeforeHangUp) {
+  String trash[1];
+  boolean terminated = false;
+
+  long initialTime = millis();
+  long callTimeout = initialTime + delayBeforeHangUp;
+
+  // start the call
+  this->_execCmd("ATD" + phoneNumber + ";", isAlphaNumeric, false, trash, "OK", "[Sim900] calling :");
+  delay(1000);
+
+  for (int i = 0; i <= 150; i++) {
+    long actualTime = millis();
+
+    if ( actualTime >= initialTime && actualTime > callTimeout) {
+      break;
+    }
+
+    String callStatus[1];
+    this->_execCmd("AT+CPAS", isDigit, true, callStatus, "", "");
+
+    if (callStatus[0] == "0") {
+      this->_printDebug("terminated");
+      terminated = true;
+      break;
+    }
+    this->_printDebug("progress");
+    delay(500);
+
+  }
+  if(!terminated) {
+    this->_execCmd("ATH", isAlphaNumeric, false, trash, "ATH", "[Sim900] hang up call :");
+  }
 }

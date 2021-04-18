@@ -42,16 +42,16 @@ class sim900MiniLib {
     boolean checkRegistration();
 
     // Extract phone number, index, date and message from the SMS
-    void readSMS(String smsData[4]);
+    boolean readSMS(String smsData[4]);
 
     // Send SMS
     boolean sendSMS(String phoneNumber, String textSMS);
 
-    // Call someone
-    void callSomeone(String phoneNumber, long int delayBeforeHangUp = 30000);
-
     // Get time
     boolean time(String timeInfos[2]);
+
+    // Call someone
+    void callSomeone(String phoneNumber, long int delayBeforeHangUp = 30000);
 };
 
 #endif
