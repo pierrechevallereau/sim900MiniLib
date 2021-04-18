@@ -323,15 +323,17 @@ void sim900MiniLib::callSomeone(String phoneNumber, long int delayBeforeHangUp) 
 
   long initialTime = millis();
   long callTimeout = initialTime + delayBeforeHangUp;
+  long actualTime = millis();
 
   // start the call
   this->_execCmd("ATD" + phoneNumber + ";", isAlphaNumeric, false, trash, "OK", "[Sim900] calling :");
   delay(1000);
 
-  for (int i = 0; i <= 150; i++) {
-    long actualTime = millis();
+  while (actualTime < callTimeout) {
+    actualTime = millis();
 
-    if ( actualTime >= initialTime && actualTime > callTimeout) {
+    // security for avoid bugs with arduino uptime reset
+    if ( actualTime < initialTime) {
       break;
     }
 
