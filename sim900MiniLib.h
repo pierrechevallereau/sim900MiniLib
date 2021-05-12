@@ -48,7 +48,7 @@ class sim900MiniLib {
     boolean sendSMS(String phoneNumber, String textSMS);
 
     // Get time
-    boolean time(String timeInfos[2]);
+    boolean time(String timeInfos[7]);
 
     // Call someone
     void callSomeone(String phoneNumber, long int delayBeforeHangUp = 30000);

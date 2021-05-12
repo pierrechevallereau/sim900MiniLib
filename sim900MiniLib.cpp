@@ -116,17 +116,17 @@ void sim900MiniLib::startORstop(int pin) {
 // Check status of SIM900 module
 boolean sim900MiniLib::status() {
   String trash[1];
-  return this->_execCmd("AT", isAlphaNumeric, false, trash, "ATOK", "[Sim900] check is started :");
+  return this->_execCmd("AT", isAlphaNumeric, false, trash, "ATOK", "[S900] check is started :");
 }
 
 // AT command to set _serial->to TEXT mode
 boolean sim900MiniLib::textMode(boolean check) {
   String trash[1];
   if (check) {
-    return this->_execCmd("AT+CMGF?", isAlphaNumeric, false, trash, "CMGF1OK", "[Sim900] check txt mode :");
+    return this->_execCmd("AT+CMGF?", isAlphaNumeric, false, trash, "CMGF1OK", "[S900] check txt mode :");
   }
   else {
-    return this->_execCmd("AT+CMGF=1", isAlphaNumeric, false, trash, "OK", "[Sim900] enable txt mode :");
+    return this->_execCmd("AT+CMGF=1", isAlphaNumeric, false, trash, "OK", "[S900] enable txt mode :");
   }
 }
 
@@ -134,10 +134,10 @@ boolean sim900MiniLib::textMode(boolean check) {
 boolean sim900MiniLib::autoTimezone(boolean check) {
   String trash[1];
   if (check) {
-    return this->_execCmd("AT+CTZU?", isAlphaNumeric, false, trash, "CTZU1OK", "[Sim900] check autoTimezone :");
+    return this->_execCmd("AT+CTZU?", isAlphaNumeric, false, trash, "CTZU1OK", "[S900] check autoTimezone :");
   }
   else {
-    return this->_execCmd("AT+CTZU=1", isAlphaNumeric, false, trash, "OK", "[Sim900] enable autoTimezone :");
+    return this->_execCmd("AT+CTZU=1", isAlphaNumeric, false, trash, "OK", "[S900] enable autoTimezone :");
   }
 }
   
@@ -147,17 +147,17 @@ boolean sim900MiniLib::receiveSMSMode(String action) {
   String cmd, resultMustBe, preffix, trash[1];
 
   if (action == "check") {
-    return this->_execCmd("AT+CNMI?", isAlphaNumeric, false, trash, "CNMI22000OK", "[Sim900] check rcvdSmsMode :");
+    return this->_execCmd("AT+CNMI?", isAlphaNumeric, false, trash, "CNMI22000OK", "[S900] check rcvdSmsMode :");
   }
   else if (action == "enable") {
     cmd = "AT+CNMI=2,2,0,0,0";
     resultMustBe = "CNMI22000OK";
-    preffix = "[Sim900] en rcvdSmsMode :";
+    preffix = "[S900] en rcvdSmsMode :";
   }
   else if (action == "disable") {
     cmd = "AT+CNMI=0,0,0,0,0";
     resultMustBe = "CNMI00000OK";
-    preffix = "[Sim900] dis rcvdSmsMode :";
+    preffix = "[S900] dis rcvdSmsMode :";
   }
 
   // for enable disable allow 5 retry
@@ -180,7 +180,7 @@ boolean sim900MiniLib::receiveSMSMode(String action) {
 boolean sim900MiniLib::checkRegistration() {
   String dataS[1];
 
-  this->_execCmd("AT+CREG?", isDigit, true, dataS, "", "[Sim900] check GSM : ");
+  this->_execCmd("AT+CREG?", isDigit, true, dataS, "", "[S900] check GSM : ");
 
   if (dataS[0] == "01" || dataS[0] == "05") {
     this->_printDebug("is registrated");
@@ -254,7 +254,7 @@ boolean sim900MiniLib::readSMS(String smsData[4]) {
 // Send SMS
 boolean sim900MiniLib::sendSMS(String phoneNumber, String textSMS) {
   // send sms
-  this->_printDebug("[Sim900] sending sms :");
+  this->_printDebug("[S900] reply sms :");
   _serial->println("AT + CMGS = \"" + phoneNumber + "\"");
   delay(70);
   _serial->print(textSMS);  // End AT command with ASCII code 26
@@ -287,32 +287,33 @@ boolean sim900MiniLib::sendSMS(String phoneNumber, String textSMS) {
 
 // Get time
 boolean sim900MiniLib::time(String timeInfos[7]) {
-  String dataS[1];
+  String dataToReturn[1];
 
-  if(!this->_execCmd("AT+CCLK?", isAlphaNumeric, true, dataS, "OK", "[Sim900] get time :")) {
-    this->_printDebug(dataS[0]);
+  if(!this->_execCmd("AT+CCLK?", isAlphaNumeric, true, dataToReturn, "OK", "[S900] time :")) {
     this->_printDebug("is notok");
+    this->_printDebug(dataToReturn[0]);
     return false;
   }
 
-  char charArr[27];
-  dataS[0].toCharArray(charArr, 27);
+  char charArr[26];
+  dataToReturn[0].toCharArray(charArr, 26);
+
   String digit;
-  for (int i=0; i <= sizeof(charArr) / sizeof(charArr[0]); i++) {
+  int x=1;
+  int y=0;
+  for (int i=0; i < 26; i++) {
     if (isDigit(charArr[i])) {
-      digit.concat(charArr[i]);
+      if (x == 3) {
+        x = 1; y++;
+        if (y == 6) { break; }
+      }
+      if (x <= 2) {
+        timeInfos[y].concat(charArr[i]);
+        x++;
+      }
     }
   }
 
-  char digitArr[14];
-  digit.toCharArray(digitArr, 14);
-  timeInfos[0].concat(digitArr[0]); timeInfos[0].concat(digitArr[1]); // Year
-  timeInfos[1].concat(digitArr[2]); timeInfos[1].concat(digitArr[3]); // Month
-  timeInfos[2].concat(digitArr[4]); timeInfos[2].concat(digitArr[5]); // Day
-  timeInfos[3].concat(digitArr[6]); timeInfos[3].concat(digitArr[7]); // Hour
-  timeInfos[4].concat(digitArr[8]); timeInfos[4].concat(digitArr[9]); // Minute
-  timeInfos[5].concat(digitArr[10]); timeInfos[5].concat(digitArr[11]); // Second
-  timeInfos[6].concat(digitArr[12]); timeInfos[6].concat(digitArr[13]); // Timezone
   return true;
 }
 
@@ -326,7 +327,7 @@ void sim900MiniLib::callSomeone(String phoneNumber, long int delayBeforeHangUp) 
   long actualTime = millis();
 
   // start the call
-  this->_execCmd("ATD" + phoneNumber + ";", isAlphaNumeric, false, trash, "OK", "[Sim900] calling :");
+  this->_execCmd("ATD" + phoneNumber + ";", isAlphaNumeric, false, trash, "OK", "[S900] calling :");
   delay(1000);
 
   while (actualTime < callTimeout) {
@@ -350,6 +351,6 @@ void sim900MiniLib::callSomeone(String phoneNumber, long int delayBeforeHangUp) 
 
   }
   if(!terminated) {
-    this->_execCmd("ATH", isAlphaNumeric, false, trash, "ATH", "[Sim900] hang up call :");
+    this->_execCmd("ATH", isAlphaNumeric, false, trash, "ATH", "[S900] hang up :");
   }
 }
