@@ -47,7 +47,7 @@ boolean sim900MiniLib::_execCmd(String cmd, boolean (*function)(int), boolean re
   if (prefix != "") {this->_printDebug(prefix, false);}
 
   _serial->println(cmd);
-  delay(100);
+  delay(150);
 
   for (int i=0; i <= 5; i++) {
     while (_serial->available() > 0) {
@@ -164,8 +164,7 @@ boolean sim900MiniLib::receiveSMSMode(String action) {
   for (int i=0; i <= 5; i++) {
     if (this->_execCmd(cmd, isAlphaNumeric, false, trash, resultMustBe, preffix)) {
       return true;
-    }
-    else {
+    } else {
       delay(250);
     }
   }
@@ -201,7 +200,7 @@ boolean sim900MiniLib::readSMS(String smsData[4]) {
   int ligneDelim = 0; // delimiter = '\n'
   int SMSInfoDelim = 0; //delimiter = '"'
   int rcvdCheck = 0;
-  int rcvdIsSMS = 0;
+  boolean rcvdIsSMS = false;
   String SMSSender = "";
   String SMSIndex = "";
   String SMSDate = "";
@@ -214,13 +213,13 @@ boolean sim900MiniLib::readSMS(String smsData[4]) {
     if (data == '"') {SMSInfoDelim++;}
   
     if (ligneDelim == 1) {
-      if (rcvdIsSMS == 0) {
-        if (data == '+') {rcvdCheck = 1;}
-        if ((data == 'C') && (rcvdCheck == 1)) {rcvdCheck = 2;}
-        if ((data == 'M') && (rcvdCheck == 2)) {rcvdCheck = 3;}
-        if ((data == 'T') && (rcvdCheck == 3)) {rcvdCheck = 4;}
-        if ((data == ':') && (rcvdCheck == 4)) {rcvdCheck = 5;}
-        if (rcvdCheck == 5) {rcvdIsSMS = 1;}
+      if (!rcvdIsSMS) {
+        if (data == '+') {rcvdCheck++;}
+        if (data == 'C') {rcvdCheck++;}
+        if (data == 'M') {rcvdCheck++;}
+        if (data == 'T') {rcvdCheck++;}
+        if (data == ':') {rcvdCheck++;}
+        if (rcvdCheck == 5) {rcvdIsSMS = true;}
       }
     
       if (rcvdIsSMS == 1 && data != '"') {
@@ -229,10 +228,10 @@ boolean sim900MiniLib::readSMS(String smsData[4]) {
         if (SMSInfoDelim == 5) {SMSDate.concat(data);}
       }
     }
-    if (ligneDelim == 2 && rcvdIsSMS == 1 && data != '\n' && data != ' ') {
+    if (ligneDelim == 2 && rcvdIsSMS && data != '\n' && data != ' ') {
         SMSMessage.concat(data);
     }
-    if (ligneDelim == 3 && rcvdIsSMS == 1) {
+    if (ligneDelim == 3 && rcvdIsSMS) {
       SMSSender.trim();
       SMSIndex.trim();
       SMSDate.trim();
@@ -248,6 +247,7 @@ boolean sim900MiniLib::readSMS(String smsData[4]) {
       return true;
     }
   }
+
   return false;
 }
 
@@ -290,8 +290,6 @@ boolean sim900MiniLib::time(String timeInfos[7]) {
   String dataToReturn[1];
 
   if(!this->_execCmd("AT+CCLK?", isAlphaNumeric, true, dataToReturn, "OK", "[S900] time :")) {
-    this->_printDebug("is notok");
-    this->_printDebug(dataToReturn[0]);
     return false;
   }
 
@@ -319,6 +317,7 @@ boolean sim900MiniLib::time(String timeInfos[7]) {
 
 // Call someone
 void sim900MiniLib::callSomeone(String phoneNumber, long int delayBeforeHangUp) {
+  delay(500); // wait to avoid freeze from the sim900 module
   String trash[1];
   boolean terminated = false;
 
@@ -328,7 +327,6 @@ void sim900MiniLib::callSomeone(String phoneNumber, long int delayBeforeHangUp) 
 
   // start the call
   this->_execCmd("ATD" + phoneNumber + ";", isAlphaNumeric, false, trash, "OK", "[S900] calling :");
-  delay(1000);
 
   while (actualTime < callTimeout) {
     actualTime = millis();
