@@ -28,7 +28,7 @@ void sim900MiniLib::_updateSerial() {
 }
 
 // Print debug logs when debug is enable
-void sim900MiniLib::_printDebug(String message, boolean newLine) {
+void sim900MiniLib::_printDebug(const __FlashStringHelper* message, boolean newLine) {
   if (_debug) {
     if (newLine) {
       _hwSerial->println(message);
@@ -40,11 +40,11 @@ void sim900MiniLib::_printDebug(String message, boolean newLine) {
 }
 
 // Check return of the previous cmd, DEFAULT ARG = OK
-boolean sim900MiniLib::_execCmd(String cmd, boolean (*function)(int), boolean returnResult, String dataToReturn[1], String resultMustBe, String prefix)
+boolean sim900MiniLib::_execCmd(const String cmd, boolean (*function)(int), boolean returnResult, String dataToReturn[1], const String resultMustBe, const __FlashStringHelper* prefix)
 {
   String dataS;
 
-  if (prefix != "") {this->_printDebug(prefix, false);}
+  if (prefix != F("")) {this->_printDebug(prefix, false);}
 
   _serial->println(cmd);
   delay(150);
@@ -75,17 +75,17 @@ boolean sim900MiniLib::_execCmd(String cmd, boolean (*function)(int), boolean re
 
   // resultMustBe is mandatory if returnResult is false
   if (!returnResult && resultMustBe == ""){
-    this->_printDebug("please provide resultMustBe");
+    this->_printDebug(F("please provide resultMustBe"));
     return false;
   }
 
   // check the result
   if (dataS.endsWith(resultMustBe)) {
-    this->_printDebug(" is ok");
+    this->_printDebug(F(" is ok"));
     return true;
   }
   else {
-    this->_printDebug(" is NOTOK " + dataS);
+    this->_printDebug(F(" is NOTOK"));
     return false;
   }
 }
@@ -97,15 +97,15 @@ boolean sim900MiniLib::_execCmd(String cmd, boolean (*function)(int), boolean re
 // Print debug mode (enabled/disabled)
 void sim900MiniLib::checkDebug() {
   if (_debug) {
-    _hwSerial->println("Debug enabled"); 
+    _hwSerial->println(F("Debug enabled")); 
   }
   else {
-    _hwSerial->println("Debug disabled"); 
+    _hwSerial->println(F("Debug disabled")); 
   }
 }
 
 // Start the GSM _serial->module
-void sim900MiniLib::startORstop(int pin) {
+void sim900MiniLib::startORstop(const int pin) {
   pinMode(pin, OUTPUT);
   digitalWrite(pin, HIGH);
   delay(1000);
@@ -116,17 +116,17 @@ void sim900MiniLib::startORstop(int pin) {
 // Check status of SIM900 module
 boolean sim900MiniLib::status() {
   String trash[1];
-  return this->_execCmd("AT", isAlphaNumeric, false, trash, "ATOK", "[S900] check is started :");
+  return this->_execCmd("AT", isAlphaNumeric, false, trash, "ATOK", F("[S900] check is started :"));
 }
 
 // AT command to set _serial->to TEXT mode
 boolean sim900MiniLib::textMode(boolean check) {
   String trash[1];
   if (check) {
-    return this->_execCmd("AT+CMGF?", isAlphaNumeric, false, trash, "CMGF1OK", "[S900] check txt mode :");
+    return this->_execCmd("AT+CMGF?", isAlphaNumeric, false, trash, "CMGF1OK", F("[S900] check txt mode :"));
   }
   else {
-    return this->_execCmd("AT+CMGF=1", isAlphaNumeric, false, trash, "OK", "[S900] enable txt mode :");
+    return this->_execCmd("AT+CMGF=1", isAlphaNumeric, false, trash, "OK", F("[S900] enable txt mode :"));
   }
 }
 
@@ -134,30 +134,31 @@ boolean sim900MiniLib::textMode(boolean check) {
 boolean sim900MiniLib::autoTimezone(boolean check) {
   String trash[1];
   if (check) {
-    return this->_execCmd("AT+CTZU?", isAlphaNumeric, false, trash, "CTZU1OK", "[S900] check autoTimezone :");
+    return this->_execCmd("AT+CTZU?", isAlphaNumeric, false, trash, "CTZU1OK", F("[S900] check autoTimezone :"));
   }
   else {
-    return this->_execCmd("AT+CTZU=1", isAlphaNumeric, false, trash, "OK", "[S900] enable autoTimezone :");
+    return this->_execCmd("AT+CTZU=1", isAlphaNumeric, false, trash, "OK", F("[S900] enable autoTimezone :"));
   }
 }
   
 // Enable SMS Received mode
 // Set module to send SMS data to serial out upon receipt 
-boolean sim900MiniLib::receiveSMSMode(String action) {
-  String cmd, resultMustBe, preffix, trash[1];
+boolean sim900MiniLib::receiveSMSMode(const String action) {
+  String cmd, resultMustBe, trash[1];
+  const __FlashStringHelper* preffix;
 
   if (action == "check") {
-    return this->_execCmd("AT+CNMI?", isAlphaNumeric, false, trash, "CNMI22000OK", "[S900] check rcvdSmsMode :");
+    return this->_execCmd("AT+CNMI?", isAlphaNumeric, false, trash, "CNMI22000OK", F("[S900] check rcvdSmsMode :"));
   }
   else if (action == "enable") {
     cmd = "AT+CNMI=2,2,0,0,0";
     resultMustBe = "CNMI22000OK";
-    preffix = "[S900] en rcvdSmsMode :";
+    preffix = F("[S900] en rcvdSmsMode :");
   }
   else if (action == "disable") {
     cmd = "AT+CNMI=0,0,0,0,0";
     resultMustBe = "CNMI00000OK";
-    preffix = "[S900] dis rcvdSmsMode :";
+    preffix = F("[S900] dis rcvdSmsMode :");
   }
 
   // for enable disable allow 5 retry
@@ -179,18 +180,18 @@ boolean sim900MiniLib::receiveSMSMode(String action) {
 boolean sim900MiniLib::checkRegistration() {
   String dataS[1];
 
-  this->_execCmd("AT+CREG?", isDigit, true, dataS, "", "[S900] check GSM : ");
+  this->_execCmd("AT+CREG?", isDigit, true, dataS, "", F("[S900] check GSM : "));
 
   if (dataS[0] == "01" || dataS[0] == "05") {
-    this->_printDebug("is registrated");
+    this->_printDebug(F("is registrated"));
     return 1;
   }
   else if (dataS[0] == "02") {
-    this->_printDebug("is asking for registration");
+    this->_printDebug(F("is asking for registration"));
     return 2;
   } 
   else {
-    this->_printDebug("is not registrated");
+    this->_printDebug(F("is not registrated"));
     return 0;
   } 
 }
@@ -243,7 +244,7 @@ boolean sim900MiniLib::readSMS(String smsData[4]) {
       smsData[2] = SMSDate;
       smsData[3] = SMSMessage;
 
-      this->_printDebug("received");
+      this->_printDebug(F("received"));
       return true;
     }
   }
@@ -252,9 +253,9 @@ boolean sim900MiniLib::readSMS(String smsData[4]) {
 }
 
 // Send SMS
-boolean sim900MiniLib::sendSMS(String phoneNumber, String textSMS) {
+boolean sim900MiniLib::sendSMS(const String phoneNumber, const String textSMS) {
   // send sms
-  this->_printDebug("[S900] reply sms :");
+  this->_printDebug(F("[S900] reply sms :"));
   _serial->println("AT + CMGS = \"" + phoneNumber + "\"");
   delay(70);
   _serial->print(textSMS);  // End AT command with ASCII code 26
@@ -273,15 +274,15 @@ boolean sim900MiniLib::sendSMS(String phoneNumber, String textSMS) {
     }
 
     if (dataS.endsWith("CMGSOK")) {
-      this->_printDebug("is ok");
+      this->_printDebug(F("is ok"));
       return true;
     }
     else {
-      this->_printDebug("waiting");
+      this->_printDebug(F("waiting"));
     }
     delay(250);
   }
-  this->_printDebug("is NOTOK");
+  this->_printDebug(F("is NOTOK"));
   return false;
 }
 
@@ -289,7 +290,7 @@ boolean sim900MiniLib::sendSMS(String phoneNumber, String textSMS) {
 boolean sim900MiniLib::time(String timeInfos[7]) {
   String dataToReturn[1];
 
-  if(!this->_execCmd("AT+CCLK?", isAlphaNumeric, true, dataToReturn, "OK", "[S900] time :")) {
+  if(!this->_execCmd("AT+CCLK?", isAlphaNumeric, true, dataToReturn, "OK", F("[S900] time :"))) {
     return false;
   }
 
@@ -316,7 +317,7 @@ boolean sim900MiniLib::time(String timeInfos[7]) {
 }
 
 // Call someone
-void sim900MiniLib::callSomeone(String phoneNumber, long int delayBeforeHangUp) {
+void sim900MiniLib::callSomeone(const String phoneNumber, long int delayBeforeHangUp) {
   delay(500); // wait to avoid freeze from the sim900 module
   String trash[1];
   boolean terminated = false;
@@ -326,7 +327,7 @@ void sim900MiniLib::callSomeone(String phoneNumber, long int delayBeforeHangUp) 
   long actualTime = millis();
 
   // start the call
-  this->_execCmd("ATD" + phoneNumber + ";", isAlphaNumeric, false, trash, "OK", "[S900] calling :");
+  this->_execCmd("ATD" + phoneNumber + ";", isAlphaNumeric, false, trash, "OK", F("[S900] calling :"));
 
   while (actualTime < callTimeout) {
     actualTime = millis();
@@ -337,18 +338,18 @@ void sim900MiniLib::callSomeone(String phoneNumber, long int delayBeforeHangUp) 
     }
 
     String callStatus[1];
-    this->_execCmd("AT+CPAS", isDigit, true, callStatus, "", "");
+    this->_execCmd("AT+CPAS", isDigit, true, callStatus, "", F(""));
 
     if (callStatus[0] == "0") {
-      this->_printDebug("terminated");
+      this->_printDebug(F("terminated"));
       terminated = true;
       break;
     }
-    this->_printDebug("progress");
+    this->_printDebug(F("progress"));
     delay(500);
 
   }
   if(!terminated) {
-    this->_execCmd("ATH", isAlphaNumeric, false, trash, "ATH", "[S900] hang up :");
+    this->_execCmd("ATH", isAlphaNumeric, false, trash, "ATH", F("[S900] hang up :"));
   }
 }

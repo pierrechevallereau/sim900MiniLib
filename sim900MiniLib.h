@@ -14,8 +14,8 @@ class sim900MiniLib {
     boolean _receiveSMSmode = false;
 
     void _updateSerial();
-    void _printDebug(String message, boolean newLine = true);
-    boolean _execCmd(String cmd, boolean (*function)(int), boolean returnResult, String dataToReturn[1], String resultMustBe, String prefix);
+    void _printDebug(const __FlashStringHelper* message, boolean newLine = true);
+    boolean _execCmd(const String cmd, boolean (*function)(int), boolean returnResult, String dataToReturn[1], const String resultMustBe, const __FlashStringHelper* prefix);
 
   public:
     sim900MiniLib(SoftwareSerial * SIM900Serial, HardwareSerial * hwSerial, boolean debug);
@@ -27,7 +27,7 @@ class sim900MiniLib {
     boolean status();
 
     // Start the GSM SIM900 module
-    void startORstop(int pin);
+    void startORstop(const int pin);
 
     // AT command to set SIM900 to TEXT mode
     boolean textMode(boolean check = false);
@@ -36,7 +36,7 @@ class sim900MiniLib {
     boolean autoTimezone(boolean check = false);
   
     // Enable SMS Received mode
-    boolean receiveSMSMode(String action);
+    boolean receiveSMSMode(const String action);
 
     // check GSM registration
     boolean checkRegistration();
@@ -45,13 +45,13 @@ class sim900MiniLib {
     boolean readSMS(String smsData[4]);
 
     // Send SMS
-    boolean sendSMS(String phoneNumber, String textSMS);
+    boolean sendSMS(const String phoneNumber, const String textSMS);
 
     // Get time
     boolean time(String timeInfos[7]);
 
     // Call someone
-    void callSomeone(String phoneNumber, long int delayBeforeHangUp = 30000);
+    void callSomeone(const String phoneNumber, long int delayBeforeHangUp = 30000);
 };
 
 #endif
