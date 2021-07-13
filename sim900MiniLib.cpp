@@ -244,7 +244,7 @@ boolean sim900MiniLib::readSMS(String smsData[4]) {
       smsData[2] = SMSDate;
       smsData[3] = SMSMessage;
 
-      this->_printDebug(F("received"));
+      this->_printDebug(F("[S900] sms received"));
       return true;
     }
   }
