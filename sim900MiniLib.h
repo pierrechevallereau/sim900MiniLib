@@ -1,57 +1,99 @@
-//sim900MiniLib.h
+// sim900MiniLib.h
+//
+// Minimalist library for SIM900 module (AT commands) — v2
+// - No Strings: fixed-size char[] buffers (no heap fragmentation)
+// - Line-by-line parsing: no more reliance on echo, no lingering "OK" messages
+// - Incoming SMS messages (+CMT) are captured wherever they arrive (even during a command)
+// - Works with any Stream (SoftwareSerial, Serial1, ...)
 
 #ifndef SIM900MINILIB_H
 #define SIM900MINILIB_H
 
-#include "Arduino.h"
-#include <SoftwareSerial.h>
+#include <Arduino.h>
+
+#ifndef SIM900_LINE_MAX
+#define SIM900_LINE_MAX 80       // Maximum size of a response line (including header and CMT)
+#endif
+#ifndef SIM900_SMS_MAX
+#define SIM900_SMS_MAX 160       // Maximum text size for a saved SMS
+#endif
+#define SIM900_SMS_TIMEOUT_MS 1000  // safety: abort if the final \n never comes
+
+struct Sim900Sms {
+  char sender[22];
+  char date[24];                 // ex: 26/10/24,14:30:00+08
+  char message[SIM900_SMS_MAX + 1];
+};
+
+struct Sim900Time {
+  uint8_t year, month, day, hour, minute, second;   // year in 2 digits
+  int8_t tzQuarters;                                // Time zone in quarter hours (+08 => 8)
+};
 
 class sim900MiniLib {
-  private:
-    SoftwareSerial * _serial;
-    HardwareSerial * _hwSerial;
-    boolean _debug;
-    boolean _receiveSMSmode = false;
+public:
+  // debug = nullptr to disable logs
+  sim900MiniLib(Stream* gsm, Stream* debug = nullptr);
 
-    void _updateSerial();
-    void _printDebug(const __FlashStringHelper* message, boolean newLine = true);
-    boolean _execCmd(const String cmd, boolean (*function)(int), boolean returnResult, String dataToReturn[1], const String resultMustBe, const __FlashStringHelper* prefix);
+  // Synchronizes autobaud (AT x N) and cuts echo (ATE0)
+  bool begin();
 
-  public:
-    sim900MiniLib(SoftwareSerial * SIM900Serial, HardwareSerial * hwSerial, boolean debug);
+  // Pressing PWRKEY: Turns ON or OFF depending on the current state (toggle)
+  void startORstop(uint8_t pin);
+  // Only turns on if the module is not responding, then calls begin()
+  bool powerOn(uint8_t pin);
 
-    // begin serial
-    void checkDebug();
+  bool status();
+  bool textMode(bool check = false);
+  bool autoTimezone(bool check = false);
 
-    // Status of the GSM SIM900 module
-    boolean status();
+  bool receiveSMSMode(bool enable);
+  bool isReceiveSMSMode();
 
-    // Start the GSM SIM900 module
-    void startORstop(const int pin);
+  // -1: No response | 0: Not registered | 1: Registered (home/roaming) | 2: Searching
+  int8_t checkRegistration();
 
-    // AT command to set SIM900 to TEXT mode
-    boolean textMode(boolean check = false);
+  // Non-blocking: to be called frequently in loop().
+  // Returns a pointer to the received SMS (valid until the next call
+  // to a method in the library), or nullptr if there is nothing new.
+  const Sim900Sms* readSMS();
 
-    // AT command to set _serial->to automatic timezone mode
-    boolean autoTimezone(boolean check = false);
-  
-    // Enable SMS Received mode
-    boolean receiveSMSMode(const String action);
+  bool sendSMS(const char* phoneNumber, const char* text);
+  bool time(Sim900Time& t);
+  bool callSomeone(const char* phoneNumber, uint32_t maxDurationMs = 30000);
 
-    // check GSM registration
-    boolean checkRegistration();
+  // Clears the serial port by processing incoming SMS messages (called by readSMS)
+  void service();
 
-    // Extract phone number, index, date and message from the SMS
-    boolean readSMS(String smsData[4]);
+private:
+  enum State : uint8_t { IDLE, BODY };
 
-    // Send SMS
-    boolean sendSMS(const String phoneNumber, const String textSMS);
+  Stream* _gsm;
+  Stream* _dbg;
 
-    // Get time
-    boolean time(String timeInfos[7]);
+  char     _line[SIM900_LINE_MAX];
+  uint8_t  _lineLen = 0;
+  State    _state = IDLE;
+  uint32_t _lastRx = 0;
 
-    // Call someone
-    void callSomeone(const String phoneNumber, long int delayBeforeHangUp = 30000);
+  Sim900Sms _sms;
+  uint8_t   _msgLen = 0;
+  bool      _smsReady = false;
+
+  bool _waitingPrompt = false;
+  bool _gotPrompt = false;
+
+  bool _pollLine();
+  bool _handleUrc(const char* line);
+  void _bodyChar(char c);
+  void _checkSmsEnd();
+  void _finishSms();
+  void _drain();
+  void _idle(uint32_t ms);
+  bool _waitOk(uint32_t timeoutMs, const char* prefix = nullptr,
+               char* out = nullptr, size_t outLen = 0);
+  bool _cmd(const __FlashStringHelper* cmd, uint32_t timeoutMs = 1000,
+            const char* prefix = nullptr, char* out = nullptr, size_t outLen = 0);
 };
 
 #endif
