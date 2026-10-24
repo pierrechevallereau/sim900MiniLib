@@ -1,140 +1,102 @@
 # sim900MiniLib
 
-sim900MiniLib is an Arduino library for dealing with a sim900 module via the AT commands.\
-It will give you the possibility to send and receive SMS, call someone and registrating to a GSM provider
+sim900MiniLib is an Arduino library for dealing with a SIM900 module via AT commands.
+It lets you send and receive SMS, call someone, read the network time and register to a GSM provider.
+
+Design notes (v2):
+
+- no `String`: fixed-size `char[]` buffers, so no heap fragmentation on small AVRs
+- responses are parsed line by line (`OK` / `ERROR` / `+CME ERROR` / `+CMS ERROR`), with or without echo
+- incoming SMS (`+CMT:`) are captured wherever they arrive, even while a command is running
+- works with any `Stream` (`SoftwareSerial`, `Serial1`, ...)
 
 ## Installation
 
-Clone the repository and import the library using your IDE
+Clone the repository and import the library using your IDE.
 
 ## Usage
 
-\- Import the library and dependencies
-```C++
-#include <sim900MiniLib.h>
+```cpp
 #include <SoftwareSerial.h>
+#include <sim900MiniLib.h>
+
+SoftwareSerial SIM900Serial(7, 8);           // RX, TX on the Arduino side
+sim900MiniLib gsm(&SIM900Serial, &Serial);   // 2nd argument: debug stream, nullptr to disable logs
+
+void setup() {
+  Serial.begin(115200);
+  SIM900Serial.begin(19200);
+}
 ```
 
-\- Initialize the library
-```C++
-boolean debug = true;
-SoftwareSerial SIM900Serial(7, 8); // I'm using a software to preserve the hardware serial for the serial console (replace the pin number 7(rx), 8(tx) with yours)
-sim900MiniLib sim900MiniLib(
-    &SIM900Serial, // pass a pointer to the var SIM900Serial (SoftwareSerial)
-    &Serial,       // pass a pointer to the var Serial (HardwareSerial)
-    debug
-);
+See `examples/ReceiveSms` for a complete sketch.
 
-// Don't forget to set the serials speeds in the setup function
-Serial.begin(115200);
-SIM900Serial.begin(19200);
+### API
+
+All functions are blocking except `readSMS()` and `service()`. Avoid long `delay()` calls in `loop()`:
+the `SoftwareSerial` RX buffer only holds 64 bytes.
+
+| Function | Description |
+|---|---|
+| `bool begin()` | sync autobaud (`AT`) and disable echo (`ATE0`) |
+| `void startORstop(uint8_t pin)` | pulse PWRKEY: **toggles** the module power |
+| `bool powerOn(uint8_t pin)` | power on only if the module does not answer, then `begin()` |
+| `bool status()` | `AT`, true if the module answers |
+| `bool textMode(bool check = false)` | `AT+CMGF=1`, or with `check = true` verify it is set (`AT+CMGF?`) |
+| `bool autoTimezone(bool check = false)` | `AT+CTZU=1`, or with `check = true` verify it is set (`AT+CTZU?`) |
+| `bool receiveSMSMode(bool enable)` | `AT+CNMI=2,2,0,0,0` (enable) or `AT+CNMI=0,0,0,0,0` (disable) |
+| `bool isReceiveSMSMode()` | check the state with `AT+CNMI?` |
+| `int8_t checkRegistration()` | `-1`: no answer, `0`: not registered, `1`: registered (home or roaming), `2`: searching (recheck soon) |
+| `const Sim900Sms* readSMS()` | non-blocking, call it often; returns `nullptr` if there is no new SMS |
+| `bool sendSMS(const char* number, const char* text)` | `AT+CMGS`, waits for the `>` prompt, up to 30 s for the result |
+| `bool time(Sim900Time& t)` | `AT+CCLK?` |
+| `bool callSomeone(const char* number, uint32_t maxDurationMs = 30000)` | `ATD`, polls `AT+CPAS`, hangs up (`ATH`) after the delay |
+
+### Reading an SMS
+
+```cpp
+const Sim900Sms* sms = gsm.readSMS();
+if (sms) {
+  Serial.println(sms->sender);    // e.g. +33612345678
+  Serial.println(sms->date);      // e.g. 26/10/24,14:30:00+08
+  Serial.println(sms->message);
+}
 ```
 
-\- Start the GSM Sim900 module
-```C++
-// Input : int pin
-sim900MiniLib.startORstop(your_control_pin);
+The returned pointer is only valid until the next call to a library function. Only one SMS is buffered:
+an unread SMS is overwritten by the next one. Multi-line SMS are truncated to their first line.
+The text is kept as received (no lower-casing, spaces are kept).
+
+### Reading the network time
+
+```cpp
+Sim900Time t;
+if (gsm.time(t)) {
+  // t.year (2 digits), t.month, t.day, t.hour, t.minute, t.second
+  // t.tzQuarters: timezone in quarters of an hour (+08 => 8)
+}
 ```
 
-\- Check if the Sim900 is alive `(cmd: AT)`
-```C++
-sim900MiniLib.status();
+### Buffer sizes
 
-// Result {type: boolean}, true if it's ok
+Override before including the library if you need to save RAM:
+
+```cpp
+#define SIM900_SMS_MAX 80
+#define SIM900_LINE_MAX 64
 ```
 
-\- Set the Sim900 in text mode `(cmd: AT+CMGF?)` or check if it's the case `(cmd: AT+CMGF=1)`
-```C++
-// Input : boolean check (default: false), set it to true to check
-sim900MiniLib.textMode(false);
+## Migrating from v1
 
-// Result {type: boolean}, true if it's ok
-```
-
-\- Set the Sim900 in automatic timezone mode `(cmd: AT+CTZU?)` or check it `(cmd: AT+CTZU=1)`
-```C++
-// Input : boolean check (default: false), set it to true to check
-sim900MiniLib.autoTimezone(false);
-
-// Result {type: boolean}, true if it's ok
-```
-
-\- Check if the Sim900 is registrated `(cmd: AT+CREG?)`
-```C++
-sim900MiniLib.checkRegistration();
-
-/*
-Result {type: int},
-  0: is not registrated
-  1: is registrated
-  2: is asking for registration (you must recheck soon)
-*/
-```
-
-\- Enable/Disable/Check the Sms Receive mode
-
-actions:\
-  check: to check the state of the mode `(cmd: AT+CNMI?)`\
-  enable: enable  `(cmd: AT+CNMI=2,2,0,0,0)`\
-  disable: disable `(cmd: AT+CNMI=0,0,0,0,0)`
-
-```C++
-// Input : String action (list above)
-sim900MiniLib.receiveSMSMode(F("check")); // don't forget to include the action in a F() statement [doc PROGMEM](https://www.arduino.cc/reference/en/language/variables/utilities/progmem/)
-
-// Result {type: boolean}, true if it's ok
-```
-
-\- Read an incoming Sms
-```C++
-// Input : String smsData[4], empty array of 4 elements
-sim900MiniLib.readSMS(smsData[4]);
-
-/*
-Result {the given array in input, updated with the Sms values}
-  smsData[0]: Sender Phone
-  smsData[1]: Index
-  smsData[2]: Date
-  smsData[3]: Message
-*/
-```
-
-\- Send a Sms `(cmd: "AT + CMGS = \"" + phoneNumber + "\"")`
-```C++
-// Input : String phoneNumber, recipient’s mobile number (in international format),
-//         String message
-sim900MiniLib.sendSMS("+XXXXXXXXXXXX", "ping");
-
-// Result {type: boolean}, true if it's ok
-// Note : the code can wait 30s, to let the Sim900 send the Sms without !!STREeESS!!
-```
-
-\- Get time from the GSM provider `(cmd: AT+CCLK?)`
-```C++
-// Input : String timeInfos[4], empty array of 7 elements
-sim900MiniLib.time(String timeInfos[7]);
-
-/*
-Result {the given array in input, updated with the date&time infos}
-  timeInfos[0]: Year    (2 digits)
-  timeInfos[1]: Month       "
-  timeInfos[2]: Day         "
-  timeInfos[3]: Hour        "
-  timeInfos[4]: Minutes     "
-  timeInfos[5]: Seconds     "
-  timeInfos[6]: TimeZone    "
-*/
-```
-
-\- Call someone `(cmd: "ATD" + phoneNumber + ";")`
-
-Note : to hang up the call the command used is `(cmd: ATH)`,\
-  and to check the call status (to know if the recipient has hung up) the command used is `(cmd: AT+CPAS)`
-```C++
-// Input : String phoneNumber, recipient’s mobile number (in international format),
-//         long int delayBeforeHangUp, delay before hang up
-void callSomeone(const String phoneNumber, long int delayBeforeHangUp = 30000);
-```
+| v1 | v2 |
+|---|---|
+| `sim900MiniLib(SoftwareSerial*, HardwareSerial*, bool debug)` | `sim900MiniLib(Stream* gsm, Stream* debug = nullptr)` |
+| `readSMS(String smsData[4])` | `const Sim900Sms* readSMS()` |
+| `receiveSMSMode(F("enable"))` | `receiveSMSMode(true)` |
+| `time(String timeInfos[7])` | `time(Sim900Time&)` |
+| `checkRegistration()` returned a `boolean` (so `2` was read as `true`) | returns `int8_t` |
+| `callSomeone()` returned `void` | returns `bool` |
 
 ## Contributing
+
 Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.

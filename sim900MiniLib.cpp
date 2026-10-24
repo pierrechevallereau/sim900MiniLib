@@ -1,111 +1,172 @@
 // sim900MiniLib.cpp
 
 #include "sim900MiniLib.h"
+#include <string.h>
+
+// Helpers /////////////////////////////////////////////////////////////////////
+
+static void copyRange(char* dst, size_t dstLen, const char* from, const char* to) {
+  size_t n = (size_t)(to - from);
+  if (n >= dstLen) n = dstLen - 1;
+  memcpy(dst, from, n);
+  dst[n] = '\0';
+}
+
+static bool num2(const char* p, uint8_t& out) {
+  if (p[0] < '0' || p[0] > '9' || p[1] < '0' || p[1] > '9') return false;
+  out = (uint8_t)((p[0] - '0') * 10 + (p[1] - '0'));
+  return true;
+}
+
+// Number: digits, '+' at the beginning only (avoids any injection into the AT command)
+static bool validNumber(const char* s) {
+  if (!s || !*s) return false;
+  uint8_t n = 0;
+  if (*s == '+') ++s;
+  if (!*s) return false;
+  for (; *s; ++s, ++n) {
+    if (*s < '0' || *s > '9' || n > 20) return false;
+  }
+  return true;
+}
+
+static bool isErrorLine(const char* l) {
+  return strcmp(l, "ERROR") == 0 ||
+         strncmp(l, "+CME ERROR", 10) == 0 ||
+         strncmp(l, "+CMS ERROR", 10) == 0;
+}
 
 // Constructor /////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////
-/////////////////////////////
 
-// Init function
-sim900MiniLib::sim900MiniLib(SoftwareSerial * SIM900Serial, HardwareSerial * hwSerial, boolean debug) {
-  _serial = SIM900Serial;
-  _hwSerial = hwSerial;
-  _debug = debug;
+sim900MiniLib::sim900MiniLib(Stream* gsm, Stream* debug) : _gsm(gsm), _dbg(debug) {
+  _sms.sender[0] = _sms.date[0] = _sms.message[0] = '\0';
 }
 
-// Private Methods /////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////
-/////////////////////////////
+// Reception: non-blocking line assembler ///////////////////////////////
 
-// Forward what Software Serial received to Serial Port
-void sim900MiniLib::_updateSerial() {
-  if (_debug) {
-    delay(500);
-    while (_serial->available() > 0) {
-      _hwSerial->write(_serial->read());
-    }
-  }
-}
 
-// Print debug logs when debug is enable
-void sim900MiniLib::_printDebug(const __FlashStringHelper* message, boolean newLine) {
-  if (_debug) {
-    if (newLine) {
-      _hwSerial->println(message);
-    }
-    else {
-      _hwSerial->print(message);
-    }
-  }
-}
+// Reads what is available. Returns true as soon as a "normal" (non-URC)
+// line is complete in _line; false when there is nothing left to read.
+bool sim900MiniLib::_pollLine() {
+  while (_gsm->available() > 0) {
+    int c = _gsm->read();
+    if (c < 0) break;
+    _lastRx = millis();
 
-// Check return of the previous cmd, DEFAULT ARG = OK
-boolean sim900MiniLib::_execCmd(const String cmd, boolean (*function)(int), boolean returnResult, String dataToReturn[1], const String resultMustBe, const __FlashStringHelper* prefix)
-{
-  String dataS;
+    if (_state == BODY) { _bodyChar((char)c); continue; }
 
-  if (prefix != F("")) {this->_printDebug(prefix, false);}
-
-  _serial->println(cmd);
-  delay(150);
-
-  for (int i=0; i <= 5; i++) {
-    while (_serial->available() > 0) {
-      char data = _serial->read();
-      if ((function)(data)) {
-        dataS.concat(data);
-      }
-    }
-    if (dataS != "") {
-      break;
-    }
-    else {
-      delay(20);
-    }
-  }
-  
-  // if returnResult is true and resultMustBe is "" then assign dataToReturn + return true
-  // if returnResult is true and resultMustBe is not "" then assing dataToReturn + continue the function
-  if (returnResult) {
-    dataToReturn[0] = dataS;
-    if (resultMustBe == "") {
+    if (c == '\r') continue;
+    if (c == '\n') {
+      if (_lineLen == 0) continue;           // empty lines ignored
+      _line[_lineLen] = '\0';
+      _lineLen = 0;
+      if (_dbg) { _dbg->print(F("< ")); _dbg->println(_line); }
+      if (_handleUrc(_line)) continue;
       return true;
     }
-  }
+    // the CMGS prompt "> " is not followed by a \n
+    if (c == '>' && _waitingPrompt && _lineLen == 0) { _gotPrompt = true; continue; }
 
-  // resultMustBe is mandatory if returnResult is false
-  if (!returnResult && resultMustBe == ""){
-    this->_printDebug(F("please provide resultMustBe"));
-    return false;
+    if (_lineLen < SIM900_LINE_MAX - 1) _line[_lineLen++] = (char)c;
   }
+  _checkSmsEnd();
+  return false;
+}
 
-  // check the result
-  if (dataS.endsWith(resultMustBe)) {
-    this->_printDebug(F(" is ok"));
-    return true;
+//  SMS received in CNMI=2,2 mode: +CMT: "<sender>","<name>","<date>"\r\n<text>\r\n
+bool sim900MiniLib::_handleUrc(const char* line) {
+  if (strncmp(line, "+CMT:", 5) != 0) return false;
+
+  const char* q[6];
+  uint8_t n = 0;
+  for (const char* p = line; *p && n < 6; ++p) if (*p == '"') q[n++] = p;
+
+  _sms.sender[0] = _sms.date[0] = _sms.message[0] = '\0';
+  if (n >= 2) copyRange(_sms.sender, sizeof(_sms.sender), q[0] + 1, q[1]);
+  if (n >= 6) copyRange(_sms.date, sizeof(_sms.date), q[4] + 1, q[5]);
+
+  _msgLen = 0;
+  _smsReady = false;          // an unread SMS is overwritten (buffered for a single message)
+  _state = BODY;
+  return true;
+}
+
+// The SMS text ends at the first \n. A multi-line SMS is therefore truncated at its
+// first line (the following lines are ignored): this is the price of a deterministic
+// end to a message, which cannot "swallow" the response of an AT command.
+void sim900MiniLib::_bodyChar(char c) {
+  if (c == '\r') return;
+  if (c == '\n') { _finishSms(); return; }
+  if (_msgLen < SIM900_SMS_MAX) {
+    _sms.message[_msgLen++] = c;
+    _sms.message[_msgLen] = '\0';
   }
-  else {
-    this->_printDebug(F(" is NOTOK"));
-    return false;
+}
+
+void sim900MiniLib::_finishSms() {
+  _state = IDLE;
+  _smsReady = true;
+  if (_dbg) { _dbg->print(F("[S900] sms from ")); _dbg->println(_sms.sender); }
+}
+
+// Security: If the final \n is lost (missing byte), we deliver what we have.
+void sim900MiniLib::_checkSmsEnd() {
+  if (_state == BODY && millis() - _lastRx > SIM900_SMS_TIMEOUT_MS) _finishSms();
+}
+
+void sim900MiniLib::service() {
+  while (_pollLine()) { /* Unexpected lines: ignored */ }
+}
+
+// Clears what has already arrived WITHOUT losing incoming SMS messages.
+void sim900MiniLib::_drain() { service(); }
+
+// Active wait that continues to process SMS messages (replaces delay()).
+void sim900MiniLib::_idle(uint32_t ms) {
+  uint32_t start = millis();
+  while (millis() - start < ms) service();
+}
+
+// Waits for "OK" (true) or an error/timeout (false).
+// If a prefix is ​​provided, the value of the line "<prefix> xxx" is copied to out.
+bool sim900MiniLib::_waitOk(uint32_t timeoutMs, const char* prefix, char* out, size_t outLen) {
+  if (out && outLen) out[0] = '\0';
+  uint32_t start = millis();
+  while (millis() - start < timeoutMs) {
+    if (!_pollLine()) continue;
+    if (strcmp(_line, "OK") == 0) return true;
+    if (isErrorLine(_line)) return false;
+    if (prefix && out && outLen) {
+      size_t pl = strlen(prefix);
+      if (strncmp(_line, prefix, pl) == 0) {
+        const char* v = _line + pl;
+        while (*v == ' ') ++v;
+        strncpy(out, v, outLen - 1);
+        out[outLen - 1] = '\0';
+      }
+    }
   }
+  return false;
+}
+
+bool sim900MiniLib::_cmd(const __FlashStringHelper* cmd, uint32_t timeoutMs,
+                         const char* prefix, char* out, size_t outLen) {
+  _drain();
+  if (_dbg) { _dbg->print(F("> ")); _dbg->println(cmd); }
+  _gsm->println(cmd);
+  return _waitOk(timeoutMs, prefix, out, outLen);
 }
 
 // Public Methods //////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////
-/////////////////////////////
 
-// Print debug mode (enabled/disabled)
-void sim900MiniLib::checkDebug() {
-  if (_debug) {
-    _hwSerial->println(F("Debug enabled")); 
+bool sim900MiniLib::begin() {
+  for (uint8_t i = 0; i < 10; i++) {
+    if (_cmd(F("AT"), 500)) return _cmd(F("ATE0"), 1000);
   }
-  else {
-    _hwSerial->println(F("Debug disabled")); 
-  }
+  return false;
 }
 
-// Start the GSM _serial->module
-void sim900MiniLib::startORstop(const int pin) {
+void sim900MiniLib::startORstop(uint8_t pin) {
   pinMode(pin, OUTPUT);
   digitalWrite(pin, HIGH);
   delay(1000);
@@ -113,243 +174,120 @@ void sim900MiniLib::startORstop(const int pin) {
   delay(5000);
 }
 
-// Check status of SIM900 module
-boolean sim900MiniLib::status() {
-  String trash[1];
-  return this->_execCmd("AT", isAlphaNumeric, false, trash, "ATOK", F("[S900] check is started :"));
+bool sim900MiniLib::powerOn(uint8_t pin) {
+  if (status()) return begin();
+  startORstop(pin);
+  return begin();
 }
 
-// AT command to set _serial->to TEXT mode
-boolean sim900MiniLib::textMode(boolean check) {
-  String trash[1];
-  if (check) {
-    return this->_execCmd("AT+CMGF?", isAlphaNumeric, false, trash, "CMGF1OK", F("[S900] check txt mode :"));
-  }
-  else {
-    return this->_execCmd("AT+CMGF=1", isAlphaNumeric, false, trash, "OK", F("[S900] enable txt mode :"));
-  }
+bool sim900MiniLib::status() { return _cmd(F("AT"), 500); }
+
+bool sim900MiniLib::textMode(bool check) {
+  if (!check) return _cmd(F("AT+CMGF=1"));
+  char v[4];
+  return _cmd(F("AT+CMGF?"), 1000, "+CMGF:", v, sizeof(v)) && v[0] == '1';
 }
 
-// AT command to set _serial->to automatic timezone mode
-boolean sim900MiniLib::autoTimezone(boolean check) {
-  String trash[1];
-  if (check) {
-    return this->_execCmd("AT+CTZU?", isAlphaNumeric, false, trash, "CTZU1OK", F("[S900] check autoTimezone :"));
-  }
-  else {
-    return this->_execCmd("AT+CTZU=1", isAlphaNumeric, false, trash, "OK", F("[S900] enable autoTimezone :"));
-  }
+bool sim900MiniLib::autoTimezone(bool check) {
+  if (!check) return _cmd(F("AT+CTZU=1"));
+  char v[4];
+  return _cmd(F("AT+CTZU?"), 1000, "+CTZU:", v, sizeof(v)) && v[0] == '1';
 }
-  
-// Enable SMS Received mode
-// Set module to send SMS data to serial out upon receipt 
-boolean sim900MiniLib::receiveSMSMode(const String action) {
-  String cmd, resultMustBe, trash[1];
-  const __FlashStringHelper* preffix;
 
-  if (action == "check") {
-    return this->_execCmd("AT+CNMI?", isAlphaNumeric, false, trash, "CNMI22000OK", F("[S900] check rcvdSmsMode :"));
+bool sim900MiniLib::receiveSMSMode(bool enable) {
+  for (uint8_t i = 0; i < 3; i++) {
+    if (_cmd(enable ? F("AT+CNMI=2,2,0,0,0") : F("AT+CNMI=0,0,0,0,0"))) return true;
+    _idle(250);
   }
-  else if (action == "enable") {
-    cmd = "AT+CNMI=2,2,0,0,0";
-    resultMustBe = "CNMI22000OK";
-    preffix = F("[S900] en rcvdSmsMode :");
-  }
-  else if (action == "disable") {
-    cmd = "AT+CNMI=0,0,0,0,0";
-    resultMustBe = "CNMI00000OK";
-    preffix = F("[S900] dis rcvdSmsMode :");
-  }
-
-  // for enable disable allow 5 retry
-  for (int i=0; i <= 5; i++) {
-    if (this->_execCmd(cmd, isAlphaNumeric, false, trash, resultMustBe, preffix)) {
-      return true;
-    } else {
-      delay(250);
-    }
-  }
-
   return false;
 }
 
-// Check GMS registration
-// 0 is false
-// 1 is true (registrated)
-// 2 is asking for registrated (you can retry your check)
-boolean sim900MiniLib::checkRegistration() {
-  String dataS[1];
-
-  this->_execCmd("AT+CREG?", isDigit, true, dataS, "", F("[S900] check GSM : "));
-
-  if (dataS[0] == "01" || dataS[0] == "05") {
-    this->_printDebug(F("is registrated"));
-    return 1;
-  }
-  else if (dataS[0] == "02") {
-    this->_printDebug(F("is asking for registration"));
-    return 2;
-  } 
-  else {
-    this->_printDebug(F("is not registrated"));
-    return 0;
-  } 
+bool sim900MiniLib::isReceiveSMSMode() {
+  char v[16];
+  return _cmd(F("AT+CNMI?"), 1000, "+CNMI:", v, sizeof(v)) && strcmp(v, "2,2,0,0,0") == 0;
 }
 
-// Extract phone number, index, date and message from the SMS
-boolean sim900MiniLib::readSMS(String smsData[4]) {
-  int ligneDelim = 0; // delimiter = '\n'
-  int SMSInfoDelim = 0; //delimiter = '"'
-  int rcvdCheck = 0;
-  boolean rcvdIsSMS = false;
-  String SMSSender = "";
-  String SMSIndex = "";
-  String SMSDate = "";
-  String SMSMessage = "";
-
-  while (_serial->available() > 0) {
-    char data = _serial->read();
-
-    if (data == '\n') {ligneDelim++;}
-    if (data == '"') {SMSInfoDelim++;}
-  
-    if (ligneDelim == 1) {
-      if (!rcvdIsSMS) {
-        if (data == '+') {rcvdCheck++;}
-        if (data == 'C') {rcvdCheck++;}
-        if (data == 'M') {rcvdCheck++;}
-        if (data == 'T') {rcvdCheck++;}
-        if (data == ':') {rcvdCheck++;}
-        if (rcvdCheck == 5) {rcvdIsSMS = true;}
-      }
-    
-      if (rcvdIsSMS == 1 && data != '"') {
-        if (SMSInfoDelim == 1) {SMSSender.concat(data);}
-        if (SMSInfoDelim == 3) {SMSIndex.concat(data);}
-        if (SMSInfoDelim == 5) {SMSDate.concat(data);}
-      }
-    }
-    if (ligneDelim == 2 && rcvdIsSMS && data != '\n' && data != ' ') {
-        SMSMessage.concat(data);
-    }
-    if (ligneDelim == 3 && rcvdIsSMS) {
-      SMSSender.trim();
-      SMSIndex.trim();
-      SMSDate.trim();
-      SMSMessage.trim();
-      SMSMessage.toLowerCase();
-
-      smsData[0] = SMSSender;
-      smsData[1] = SMSIndex;
-      smsData[2] = SMSDate;
-      smsData[3] = SMSMessage;
-
-      this->_printDebug(F("[S900] sms received"));
-      return true;
-    }
+int8_t sim900MiniLib::checkRegistration() {
+  char v[16];                                   // "<n>,<stat>[,<lac>,<ci>]"
+  if (!_cmd(F("AT+CREG?"), 2000, "+CREG:", v, sizeof(v))) return -1;
+  const char* comma = strchr(v, ',');
+  if (!comma) return -1;
+  switch (comma[1]) {
+    case '1': case '5': return 1;
+    case '2':           return 2;
+    default:            return 0;
   }
-
-  return false;
 }
 
-// Send SMS
-boolean sim900MiniLib::sendSMS(const String phoneNumber, const String textSMS) {
-  // send sms
-  this->_printDebug(F("[S900] reply sms :"));
-  _serial->println("AT + CMGS = \"" + phoneNumber + "\"");
-  delay(70);
-  _serial->print(textSMS);  // End AT command with ASCII code 26
-  delay(70);
-  _serial->write(26);
-
-  // wait 30s for sms send
-  for (int i = 0; i <= 120; i++) {
-    String dataS;
-
-    while (_serial->available() > 0) {
-      char data = _serial->read();
-      if (isAlpha(data)) {
-        dataS.concat(data);
-      }
-    }
-
-    if (dataS.endsWith("CMGSOK")) {
-      this->_printDebug(F("is ok"));
-      return true;
-    }
-    else {
-      this->_printDebug(F("waiting"));
-    }
-    delay(250);
-  }
-  this->_printDebug(F("is NOTOK"));
-  return false;
+const Sim900Sms* sim900MiniLib::readSMS() {
+  service();
+  if (!_smsReady) return nullptr;
+  _smsReady = false;
+  return &_sms;
 }
 
-// Get time
-boolean sim900MiniLib::time(String timeInfos[7]) {
-  String dataToReturn[1];
+bool sim900MiniLib::sendSMS(const char* number, const char* text) {
+  if (!validNumber(number) || !text) return false;
+  for (const char* p = text; *p; ++p) if (*p == 26 || *p == 27) return false;
 
-  if(!this->_execCmd("AT+CCLK?", isAlphaNumeric, true, dataToReturn, "OK", F("[S900] time :"))) {
+  _drain();
+  _gotPrompt = false;
+  _waitingPrompt = true;
+  _gsm->print(F("AT+CMGS=\""));
+  _gsm->print(number);
+  _gsm->println('"');
+
+  uint32_t start = millis();
+  while (!_gotPrompt && millis() - start < 5000) {
+    if (_pollLine() && isErrorLine(_line)) break;
+  }
+  _waitingPrompt = false;
+
+  if (!_gotPrompt) {
+    _gsm->write((uint8_t)27);                    // ESC: cancels input on the module side
+    if (_dbg) _dbg->println(F("[S900] no prompt"));
     return false;
   }
 
-  char charArr[26];
-  dataToReturn[0].toCharArray(charArr, 26);
+  _gsm->print(text);
+  _gsm->write((uint8_t)26);                      // Ctrl+Z: send
+  return _waitOk(30000);                         // "+CMGS: n" then "OK"
+}
 
-  String digit;
-  int x=1;
-  int y=0;
-  for (int i=0; i < 26; i++) {
-    if (isDigit(charArr[i])) {
-      if (x == 3) {
-        x = 1; y++;
-        if (y == 6) { break; }
-      }
-      if (x <= 2) {
-        timeInfos[y].concat(charArr[i]);
-        x++;
-      }
-    }
-  }
+bool sim900MiniLib::time(Sim900Time& t) {
+  char v[28];                                    // "26/10/24,14:30:00+08" (quotes included)
+  if (!_cmd(F("AT+CCLK?"), 2000, "+CCLK:", v, sizeof(v))) return false;
 
+  const char* p = v;
+  if (*p == '"') ++p;
+  if (strlen(p) < 20) return false;
+  if (p[2] != '/' || p[5] != '/' || p[8] != ',' || p[11] != ':' || p[14] != ':') return false;
+  if (p[17] != '+' && p[17] != '-') return false;
+
+  uint8_t tz;
+  if (!num2(p, t.year) || !num2(p + 3, t.month) || !num2(p + 6, t.day) ||
+      !num2(p + 9, t.hour) || !num2(p + 12, t.minute) || !num2(p + 15, t.second) ||
+      !num2(p + 18, tz)) return false;
+  t.tzQuarters = (p[17] == '-') ? -(int8_t)tz : (int8_t)tz;
   return true;
 }
 
-// Call someone
-void sim900MiniLib::callSomeone(const String phoneNumber, long int delayBeforeHangUp) {
-  delay(500); // wait to avoid freeze from the sim900 module
-  String trash[1];
-  boolean terminated = false;
+bool sim900MiniLib::callSomeone(const char* number, uint32_t maxMs) {
+  if (!validNumber(number)) return false;
 
-  long initialTime = millis();
-  long callTimeout = initialTime + delayBeforeHangUp;
-  long actualTime = millis();
+  _drain();
+  _gsm->print(F("ATD"));
+  _gsm->print(number);
+  _gsm->println(';');
+  if (!_waitOk(10000)) return false;
 
-  // start the call
-  this->_execCmd("ATD" + phoneNumber + ";", isAlphaNumeric, false, trash, "OK", F("[S900] calling :"));
-
-  while (actualTime < callTimeout) {
-    actualTime = millis();
-
-    // security for avoid bugs with arduino uptime reset
-    if ( actualTime < initialTime) {
-      break;
-    }
-
-    String callStatus[1];
-    this->_execCmd("AT+CPAS", isDigit, true, callStatus, "", F(""));
-
-    if (callStatus[0] == "0") {
-      this->_printDebug(F("terminated"));
-      terminated = true;
-      break;
-    }
-    this->_printDebug(F("progress"));
-    delay(500);
-
+  uint32_t start = millis();                     // unsigned arithmetic: rollover OK
+  bool ended = false;
+  while (millis() - start < maxMs) {
+    char v[4];
+    if (_cmd(F("AT+CPAS"), 1000, "+CPAS:", v, sizeof(v)) && v[0] == '0') { ended = true; break; }
+    _idle(500);
   }
-  if(!terminated) {
-    this->_execCmd("ATH", isAlphaNumeric, false, trash, "ATH", F("[S900] hang up :"));
-  }
+  if (!ended) _cmd(F("ATH"), 3000);
+  return true;
 }
